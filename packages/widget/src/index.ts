@@ -37,6 +37,8 @@ export interface TranzmitWidgetConfig {
   distinctId: string;
   /** Poll interval in ms (default 5000) */
   pollInterval?: number;
+  /** URL of the voice interview embed script (defaults to {endpoint}/embed.js) */
+  embedUrl?: string;
 }
 
 declare global {
@@ -61,7 +63,7 @@ declare global {
   const BASE        = cfg.endpoint.replace(/\/$/, '');
   const CHECK_URL   = BASE + '/api/widget/check';
   const DONE_URL    = BASE + '/api/widget/complete';
-  const EMBED_URL   = BASE + '/embed.js';
+  const EMBED_URL   = cfg.embedUrl ?? (BASE + '/embed.js');
   const INTERVAL_MS = cfg.pollInterval ?? 5000;
   const WIDGET_ID   = '__tz_widget__';
 
