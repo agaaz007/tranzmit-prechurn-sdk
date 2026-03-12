@@ -144,3 +144,43 @@ When making changes:
 - Voice uses WebSocket at `wss://api.tranzmitai.com/v1/cancel/voice`
 - Microphone fallback: If mic unavailable, use text input
 - Accessibility: WCAG 2.1 AA compliance required
+
+## Pre-Churn Voice Widget (`packages/widget`)
+
+A standalone polling widget that enables on-demand voice interview popups.
+
+### How it works
+
+1. Embed `widget.js` on your site with `TRANZMIT_WIDGET_CONFIG` set
+2. The widget polls `GET /api/widget/check` every 5 seconds
+3. Trigger a popup from the dashboard (or `POST /api/widget/trigger`)
+4. A glass-morphism invite popup appears for the target user
+5. Clicking "Start Voice Interview" loads `embed.js` and launches the full voice interview
+
+### Widget config
+
+```html
+<script>
+  window.TRANZMIT_WIDGET_CONFIG = {
+    apiKey:      'eb_live_...',               // Your Tranzmit API key
+    endpoint:    'https://api.tranzmitai.com', // Your Tranzmit backend URL
+    distinctId:  currentUser.id,              // Logged-in user's distinct ID
+    pollInterval: 5000,                       // Optional, default 5000ms
+  };
+</script>
+<script src="https://api.tranzmitai.com/widget.js"></script>
+```
+
+### Widget backend endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| POST | `/api/widget/trigger` | Bearer token | Queue a trigger for one or more users (from dashboard) |
+| GET | `/api/widget/check` | `?key=` query param | Poll for a pending trigger (called by widget JS) |
+| POST | `/api/widget/complete` | None (triggerId as secret) | Record outcome (clicked/dismissed) |
+
+### Build
+
+```bash
+pnpm build:widget
+```

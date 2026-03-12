@@ -82,3 +82,24 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
     references: [tenants.id],
   }),
 }));
+
+// ─── Widget Triggers ─────────────────────────────────────────────────────────
+
+export const widgetTriggers = pgTable('widget_triggers', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  tenantId: uuid('tenant_id').references(() => tenants.id),
+  distinctId: text('distinct_id').notNull(),
+  userName: text('user_name'),
+  status: text('status').notNull().default('pending'), // pending | shown | clicked | dismissed
+  expiresAt: timestamp('expires_at').notNull(),
+  shownAt: timestamp('shown_at'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const widgetTriggersRelations = relations(widgetTriggers, ({ one }) => ({
+  tenant: one(tenants, {
+    fields: [widgetTriggers.tenantId],
+    references: [tenants.id],
+  }),
+}));

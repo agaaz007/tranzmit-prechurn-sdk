@@ -473,3 +473,236 @@ if (!process.env.VERCEL) {
 }
 
 export default app;
+
+// ============ Widget Endpoints ============
+
+const WIDGET_CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-tranzmit-api-key',
+};
+
+/**
+ * Serve the built prechurn-widget script
+ */
+let cachedWidgetJs: string | null = null;
+
+app.get('/widget.js', (_req, res) => {
+  if (!cachedWidgetJs) {
+    const paths = [
+      resolve(__dirname, '../../widget/dist/index.global.js'),
+      resolve(process.cwd(), 'packages/widget/dist/index.global.js'),
+    ];
+    for (const p of paths) {
+      if (existsSync(p)) {
+        cachedWidgetJs = readFileSync(p, 'utf-8');
+        break;
+      }
+    }
+  }
+
+  if (cachedWidgetJs) {
+    res.setHeader('Content-Type', 'application/javascript');
+    res.setHeader('Cache-Control', 'public, max-age=86400, s-maxage=86400');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.send(cachedWidgetJs);
+  } else {
+    res.status(404).send('// widget.js not found — run pnpm build first');
+  }
+});
+
+/**
+ * Lightweight API key auth for widget browser endpoints.
+ * Accepts key via ?key= query param, x-tranzmit-api-key header, or Authorization: Bearer.
+ */
+async function authenticateWidget(req: express.Request, res: express.Response): Promise<string | null> {
+  const keyFromQuery  = req.query.key as string | undefined;
+  const keyFromHeader = (req.headers['x-tranzmit-api-key'] as string | undefined)
+    || (req.headers.authorization?.startsWith('Bearer ')
+        ? req.headers.authorization.slice(7)
+        : undefined);
+  const key = keyFromQuery || keyFromHeader;
+
+  if (!key || key.length < 20 || (!key.startsWith('eb_live_') && !key.startsWith('eb_test_'))) {
+    res.status(401).json({ error: 'Invalid API key' });
+    return null;
+  }
+
+  return key.substring(0, 12); // tenant key prefix
+}
+
+app.options('/api/widget/*', (req, res) => {
+  res.set(WIDGET_CORS_HEADERS).status(204).end();
+});
+
+/**
+ * POST /api/widget/trigger
+ * Dashboard → backend: queue a voice interview invite for one or more users.
+ * Auth: standard Bearer token (dashboard-to-server).
+ */
+app.post('/api/widget/trigger', authenticate, async (req, res) => {
+  try {
+    const { distinctIds, userName } = req.body as {
+      distinctIds: string[];
+      userName?: string;
+    };
+
+    if (!Array.isArray(distinctIds) || distinctIds.length === 0) {
+      return res.status(400).json({ error: 'distinctIds must be a non-empty array' });
+    }
+
+    if (!db) {
+      return res.status(503).json({ error: 'Database not configured' });
+    }
+
+    const { widgetTriggers } = await import('./db/schema');
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30-minute window
+
+    const triggers = await Promise.all(
+      distinctIds.map(async (distinctId: string) => {
+        // Upsert: reset any existing pending trigger for this user
+        const existing = await db!.select()
+          .from(widgetTriggers)
+          .where(
+            (await import('drizzle-orm')).and(
+              (await import('drizzle-orm')).eq(widgetTriggers.tenantId, req.tenant!.id !== 'default' ? req.tenant!.id : null as any),
+              (await import('drizzle-orm')).eq(widgetTriggers.distinctId, distinctId),
+              (await import('drizzle-orm')).eq(widgetTriggers.status, 'pending'),
+            )
+          )
+          .limit(1);
+
+        if (existing.length > 0) {
+          const [updated] = await db!.update(widgetTriggers)
+            .set({ expiresAt, userName: userName ?? existing[0]!.userName, updatedAt: new Date() })
+            .where((await import('drizzle-orm')).eq(widgetTriggers.id, existing[0]!.id))
+            .returning();
+          return updated;
+        }
+
+        const [created] = await db!.insert(widgetTriggers)
+          .values({
+            tenantId: req.tenant!.id !== 'default' ? req.tenant!.id : undefined,
+            distinctId,
+            userName,
+            expiresAt,
+          })
+          .returning();
+        return created;
+      })
+    );
+
+    logger.info({ count: triggers.length }, 'Widget triggers created');
+    return res.json({ ok: true, count: triggers.length });
+  } catch (error) {
+    logger.error({ err: error }, 'Failed to create widget trigger');
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * GET /api/widget/check
+ * Widget (browser) → backend: has a trigger been queued for this user?
+ * Returns { show: true, triggerId, userName, interviewApiKey } or { show: false }.
+ * Auth: ?key= query param or x-tranzmit-api-key header.
+ */
+app.get('/api/widget/check', async (req, res) => {
+  res.set(WIDGET_CORS_HEADERS);
+  const keyPrefix = await authenticateWidget(req, res);
+  if (!keyPrefix) return;
+
+  const distinctId = req.query.distinctId as string | undefined;
+  if (!distinctId) {
+    return res.json({ show: false });
+  }
+
+  if (!db) {
+    return res.json({ show: false });
+  }
+
+  try {
+    const { widgetTriggers } = await import('./db/schema');
+    const drizzle = await import('drizzle-orm');
+
+    // Look up tenant by key prefix
+    const { apiKeys, tenants } = await import('./db/schema');
+    const tenantRows = await db.select({ id: tenants.id })
+      .from(apiKeys)
+      .innerJoin(tenants, drizzle.eq(apiKeys.tenantId, tenants.id))
+      .where(drizzle.eq(apiKeys.keyPrefix, keyPrefix))
+      .limit(1);
+
+    const tenantId = tenantRows[0]?.id ?? null;
+
+    const whereClause = tenantId
+      ? drizzle.and(
+          drizzle.eq(widgetTriggers.tenantId, tenantId),
+          drizzle.eq(widgetTriggers.distinctId, distinctId),
+          drizzle.eq(widgetTriggers.status, 'pending'),
+          drizzle.gt(widgetTriggers.expiresAt, new Date()),
+        )
+      : drizzle.and(
+          drizzle.eq(widgetTriggers.distinctId, distinctId),
+          drizzle.eq(widgetTriggers.status, 'pending'),
+          drizzle.gt(widgetTriggers.expiresAt, new Date()),
+        );
+
+    const results = await db.select()
+      .from(widgetTriggers)
+      .where(whereClause)
+      .orderBy(drizzle.desc(widgetTriggers.createdAt))
+      .limit(1);
+
+    if (results.length === 0) {
+      return res.json({ show: false });
+    }
+
+    const trigger = results[0]!;
+
+    // Mark as shown
+    await db.update(widgetTriggers)
+      .set({ status: 'shown', shownAt: new Date(), updatedAt: new Date() })
+      .where(drizzle.eq(widgetTriggers.id, trigger.id));
+
+    return res.json({
+      show: true,
+      triggerId: trigger.id,
+      userName: trigger.userName,
+    });
+  } catch (error) {
+    logger.error({ err: error }, '[Widget Check] Error');
+    return res.json({ show: false });
+  }
+});
+
+/**
+ * POST /api/widget/complete
+ * Widget (browser) → backend: record the outcome (clicked | dismissed).
+ * No auth required — triggerId acts as a secret.
+ */
+app.post('/api/widget/complete', async (req, res) => {
+  res.set(WIDGET_CORS_HEADERS);
+
+  const { triggerId, outcome } = req.body as { triggerId?: string; outcome?: string };
+  if (!triggerId || !outcome) {
+    return res.status(400).json({ error: 'triggerId and outcome are required' });
+  }
+
+  if (!db) {
+    return res.json({ ok: true }); // non-fatal if no DB
+  }
+
+  try {
+    const { widgetTriggers } = await import('./db/schema');
+    const { eq } = await import('drizzle-orm');
+
+    await db.update(widgetTriggers)
+      .set({ status: outcome, updatedAt: new Date() })
+      .where(eq(widgetTriggers.id, triggerId));
+
+    return res.json({ ok: true });
+  } catch (error) {
+    logger.error({ err: error }, '[Widget Complete] Error');
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});

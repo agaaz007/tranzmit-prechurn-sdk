@@ -345,3 +345,17 @@
   </script>
 </body>
 </html>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     PRE-CHURN VOICE WIDGET
+     Add this to your site to enable on-demand voice interview popups.
+     Trigger them from the Tranzmit dashboard (or POST /api/widget/trigger).
+  ══════════════════════════════════════════════════════════════════════════ -->
+<script>
+  window.TRANZMIT_WIDGET_CONFIG = {
+    apiKey:     'eb_live_...',              // Your Tranzmit API key
+    endpoint:   'http://localhost:3001',    // Your Tranzmit backend URL
+    distinctId: 'contact@tranzmit.com',     // Set to the logged-in user's distinct ID
+  };
+</script>
+<script src="../../packages/widget/dist/index.global.js"></script>
