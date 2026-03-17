@@ -1,7 +1,7 @@
 {
   "version": 2,
   "installCommand": "pnpm install --frozen-lockfile --prod=false",
-  "buildCommand": "pnpm build && mkdir -p public && echo '{}' > public/index.json",
+  "buildCommand": "pnpm --filter './packages/**' build && mkdir -p public && echo '{}' > public/index.json",
   "outputDirectory": "public",
   "functions": {
     "api/index.js": {
