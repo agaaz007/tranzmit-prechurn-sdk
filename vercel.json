@@ -1,7 +1,7 @@
 {
   "version": 2,
   "installCommand": "pnpm install --frozen-lockfile --prod=false",
-  "buildCommand": "pnpm --filter @tranzmit/exit-button-core build && pnpm --filter @tranzmit/exit-button-embed build && pnpm --filter @tranzmit/exit-button-react build && pnpm --filter @tranzmit/prechurn-widget build && pnpm --filter @tranzmit/exit-button-backend build && mkdir -p public && echo '{}' > public/index.json",
+  "buildCommand": "pnpm --filter './packages/**' build && mkdir -p public && echo '{}' > public/index.json",
   "outputDirectory": "public",
   "functions": {
     "api/index.js": {
